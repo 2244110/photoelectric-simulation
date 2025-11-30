@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>光电效应仿真</title>
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.6.0/lib/p5.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background:#f2f6fb; color:#222 }
+    header { background:#2b6cb0; color:white; padding:14px 18px; font-size:20px; text-align:center }
+    .layout { display:flex; gap:12px; padding:14px; }
+    #sketch { background:white; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.08); padding:10px }
+    #controls { width:340px; }
+    .control { background:white; padding:10px; margin-bottom:10px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.05) }
+    label { display:block; font-size:13px; margin-bottom:6px }
+    input[type=range] { width:100% }
+    select { width:100%; padding:6px }
+    .small { font-size:13px; color:#444 }
+    .btn { padding:8px 10px; border-radius:6px; border:none; background:#2b6cb0; color:white; cursor:pointer; margin-right:6px }
+    canvas.chart { width:100%; height:120px; border:1px solid #e6eef9; border-radius:6px; display:block; margin-top:8px }
+    .readouts { display:flex; gap:8px; margin-top:8px }
+    .readout { background:#fafafa; padding:8px; border-radius:6px; flex:1; text-align:center; font-size:14px; box-shadow:inset 0 -2px 0 rgba(0,0,0,0.02) }
+    footer { text-align:center; color:#666; font-size:12px; padding:10px }
+  </style>
+</head>
+<body>
+  <header>光电效应仿真</header>
+
+  <div class="layout">
+    <div id="sketch">
+      <!-- p5.js 画布会插入到这里 -->
+    </div>
+
+    <div id="controls">
+      <div class="control">
+        <label>波长 λ (nm): <span id="lambdaVal">400</span> nm</label>
+        <input id="lambda" type="range" min="200" max="800" value="400" />
+      </div>
+
+      <div class="control">
+        <label>光强 I (相对): <span id="intensityVal">5</span></label>
+        <input id="intensity" type="range" min="0" max="10" value="5" />
+      </div>
+
+      <div class="control">
+        <label>电压 V (V): <span id="voltageVal">0.0</span> V</label>
+        <input id="voltage" type="range" min="-5" max="10" step="0.1" value="0" />
+      </div>
+
+      <div class="control">
+        <label>材料-逸出功 φ (eV):</label>
+        <select id="phi">
+          <option value="2.1">Cs — 2.1 eV</option>
+          <option value="2.3">Na — 2.3 eV</option>
+          <option value="4.3">Zn — 4.3 eV</option>
+          <option value="5.1">Cu — 5.1 eV</option>
+        </select>
+      </div>
+
+      <div class="control small">
+        <div style="margin-bottom:8px;"><strong>实时读数</strong></div>
+        <div id="calcInfo" class="small">光子能量: — eV · K_max: — eV · 理论截止 V₀: — V</div>
+
+        <div class="readouts">
+          <div class="readout"><div id="current">0 A</div><div class="small">估算电流</div></div>
+          <div class="readout"><div id="colRate">0 /帧</div><div class="small">收集数/帧</div></div>
+        </div>
+
+        <div style="margin-top:8px;">
+          <button id="autoScan" class="btn">自动扫描 I–V（示例）</button>
+          <button id="clearIV" class="btn" style="background:#718096">清除 I–V</button>
+        </div>
+
+        <canvas id="ivCanvas" class="chart" width="300" height="160"></canvas>
+        <canvas id="histCanvas" class="chart" width="300" height="100"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <footer>提示：拖动滑块观察动画。</footer>
+
+<script>
+/* 物理常量与单位（注释里有说明） */
+const h = 6.62607015e-34;      // 普朗克常数 (J·s)
+const c = 2.99792458e8;        // 光速 (m/s)
+const eC = 1.602176634e-19;    // 元电荷 (C)
+const ev2J = eC;               // 1 eV = 1.602...e-19 J
+
+/* UI 元素引用 */
+let lambdaSlider, intensitySlider, voltageSlider, phiSelect;
+let lambdaVal, intensityVal, voltageVal, calcInfo;
+let currentEl, colRateEl, autoScanBtn, clearIVBtn;
+let ivCanvas, ivCtx, histCanvas, histCtx;
+
+/* p5 管理的画布与电子数组 */
+let electrons = [];
+const cathodeX = 80;   // 阴极 x
+const anodeX = 740;    // 阳极 x
+const areaYMin = 40, areaYMax = 360;
+
+/* 平滑电流显示 */
+let I_smooth = 0;
+
+/* I-V 曲线数据 */
+let ivData = [];
+
+/* p5.js setup 与 draw */
+function setup() {
+  // 创建 p5 画布并放进 #sketch
+  let cnv = createCanvas(820, 420);
+  cnv.parent('sketch');
+  frameRate(30);
+
+  // 绑定 UI
+  lambdaSlider = select('#lambda'); intensitySlider = select('#intensity');
+  voltageSlider = select('#voltage'); phiSelect = select('#phi');
+  lambdaVal = select('#lambdaVal'); intensityVal = select('#intensityVal'); voltageVal = select('#voltageVal');
+  calcInfo = select('#calcInfo'); currentEl = select('#current'); colRateEl = select('#colRate');
+  autoScanBtn = select('#autoScan'); clearIVBtn = select('#clearIV');
+
+  ivCanvas = document.getElementById('ivCanvas'); ivCtx = ivCanvas.getContext('2d');
+  histCanvas = document.getElementById('histCanvas'); histCtx = histCanvas.getContext('2d');
+
+  // UI 事件
+  lambdaSlider.input(()=> lambdaVal.html(lambdaSlider.value()));
+  intensitySlider.input(()=> intensityVal.html(intensitySlider.value()));
+  voltageSlider.input(()=> voltageVal.html(parseFloat(voltageSlider.value()).toFixed(1) ));
+
+  autoScanBtn.mousePressed(() => { if(!autoScanning) startAutoScan(); });
+  clearIVBtn.mousePressed(() => { ivData = []; drawIV(); });
+
+  // 初次绘制空图
+  drawIV();
+  drawHist([]);
+}
+
+let autoScanning = false;
+async function startAutoScan(){
+  autoScanning = true;
+  const originalV = parseFloat(voltageSlider.value());
+  ivData = [];
+  drawIV();
+
+  for(let V = -5.0; V <= 5.0; V += 0.5){
+    voltageSlider.value(V);
+    voltageVal.html(V.toFixed(1));
+
+    // 等待一段“稳定时间”，让残留电子大部分离开并在当前电压下达到稳态
+    // 这里等待 300 ms（可根据实际仿真速度调节）
+    await sleep(300);
+
+    // 在稳定后多帧采样做平均（例如 8 次采样）
+    let samples = 0, sumI = 0;
+    for(let k=0;k<8;k++){
+      await sleep(60);   // 每次等待一帧或两帧
+      sumI += I_smooth;
+      samples++;
+    }
+    const Iavg = sumI / Math.max(1,samples);
+
+    ivData.push({V: V, I: Iavg});
+    drawIV();
+  }
+
+  // 恢复电压
+  voltageSlider.value(originalV);
+  voltageVal.html(parseFloat(originalV).toFixed(1));
+  autoScanning = false;
+}
+
+
+function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+
+/* 主循环，每帧运行 */
+function draw(){
+  background(250);
+
+  // 读取 UI 值
+  const lambda_nm = Number(lambdaSlider.value());
+  const intensity = Number(intensitySlider.value());
+  const V = Number(voltageSlider.value());
+  const phi_eV = Number(phiSelect.value());
+
+  // 计算物理量
+  const lambda_m = lambda_nm * 1e-9;
+  const Eph_J = h * c / lambda_m;
+  const Eph_eV = Eph_J / ev2J;
+  const Kmax_eV = Math.max(0, Eph_eV - phi_eV);
+  const V0 = Kmax_eV; // 理论截止电压（数值上等于 Kmax (eV)）
+
+  // 每帧发射电子数（简单比例关系）
+  const emitPerFrame = Math.round(intensity * 2);
+
+  // 画阴极/阳极与区域
+  stroke(200); fill(255);
+  rect(50, 30, 720, 340, 8);
+  noStroke();
+  fill(90); rect(cathodeX-10, areaYMin, 10, areaYMax-areaYMin);
+  rect(anodeX, areaYMin, 10, areaYMax-areaYMin);
+  // 光束示意 (左上角)
+  fill(255, 210, 60, 160); noStroke();
+  ellipse(36, 56, 18, 18);
+  // 标注
+  fill(60); textSize(13);
+  text('阴极', cathodeX-30, areaYMin-8); text('阳极', anodeX-20, areaYMin-8);
+
+  // 发射电子（若 Kmax<=0 则光子能量不足，无发射）
+  for(let i=0;i<emitPerFrame;i++){
+    if(Kmax_eV <= 0) break;
+    // 初始能量采样：均匀 0..Kmax（简单模型）
+    const K_eV = Math.random()*Kmax_eV;
+    const speed = Math.sqrt(K_eV + 0.0001); // 用 sqrt(eV) 作速度量纲
+    electrons.push({
+      x: cathodeX,
+      y: random(areaYMin+10, areaYMax-10),
+      vx: map(speed, 0, Math.sqrt(Math.max(1,Kmax_eV)), 0.6, 4.0),
+      vy: (Math.random()-0.5)*0.8,
+      K_eV: K_eV,
+      alive: true,
+      age: 0
+    });
+  }
+
+  // 更新电子位置与判断是否被收集
+  let collectedThisFrame = 0;
+  for(let el of electrons){
+    if(!el.alive) continue;
+    el.age += 1;
+
+    // 如果电子能量小于 eV (数值上 K_eV <= V) 则无法克服电势差，逐渐停下（被反向吸回）
+    if(el.K_eV <= V){
+      el.vx *= 0.90; el.vy *= 0.95;
+      el.x += el.vx * 0.3; el.y += el.vy * 0.3;
+      fill(160); circle(el.x, el.y, 4);
+      if(el.vx < 0.03) el.alive = false;
+      continue;
+    }
+
+    // 否则按速度移动并绘制（颜色表示能量）
+    el.x += el.vx; el.y += el.vy;
+    let cval = map(el.K_eV, 0, Math.max(1,Kmax_eV), 120, 255);
+    fill(cval, 120, 20); noStroke();
+    circle(el.x, el.y, 6);
+
+    // 到达阳极则被收集
+    if(el.x >= anodeX - 2){
+      el.alive = false;
+      collectedThisFrame += 1;
+    }
+
+    // 上下反弹
+    if(el.y < areaYMin+6 || el.y > areaYMax-6) el.vy *= -1;
+    // 防止无限增长
+    if(el.age > 1000) el.alive = false;
+  }
+
+  // 清除死的电子
+  electrons = electrons.filter(e => e.alive);
+
+  // 电流估算：I = (collected * e) / dt ; dt ~ 1/frameRate
+  const dt = 1/30;
+  const Iamp = collectedThisFrame * eC / dt;
+  I_smooth = I_smooth*0.85 + Iamp*0.15;
+
+  // 更新右侧数值显示
+  calcInfo.html(`光子能量: ${Eph_eV.toFixed(3)} eV · K_max: ${Kmax_eV.toFixed(3)} eV · 理论截止 V₀ ≈ ${V0.toFixed(3)} V`);
+  currentEl.html(formatSI(I_smooth) + 'A');
+  colRateEl.html(`${collectedThisFrame} /帧`);
+
+  // 更新直方图（每帧用最近发射的 N 个电子样本）
+  // 收集过去若干电子能量做直方（仅用于示意）
+  let sample = [];
+  for(let i=0; i<electrons.length && sample.length<120; i++){
+    sample.push(electrons[i].K_eV);
+  }
+  drawHist(sample);
+
+  // 画面右下角显示 V0
+  noStroke(); fill(0,0,0,40);
+  textSize(12); fill(70);
+  text(`理论截止 V₀ = ${V0.toFixed(3)} V`, 60, 395);
+}
+
+/* 画 I-V 曲线 */
+/* 画 I-V 曲线（带坐标轴刻度 + 截止电压 V0 + 饱和电流 Isat）*/
+function drawIV(){
+  const W = ivCanvas.width;
+  const H = ivCanvas.height;
+  const left = 40, bottom = 30, top = 10, right = 10;
+
+  ivCtx.clearRect(0,0,W,H);
+  ivCtx.fillStyle = "#fff";
+  ivCtx.fillRect(0,0,W,H);
+
+  // 画边框
+  ivCtx.strokeStyle = "#d0d7e8";
+  ivCtx.strokeRect(0,0,W,H);
+
+  // 坐标轴
+  ivCtx.strokeStyle = "#333";
+  ivCtx.lineWidth = 1.2;
+
+  // x 轴
+  ivCtx.beginPath();
+  ivCtx.moveTo(left, H-bottom);
+  ivCtx.lineTo(W-right, H-bottom);
+  ivCtx.stroke();
+
+  // y 轴
+  ivCtx.beginPath();
+  ivCtx.moveTo(left, H-bottom);
+  ivCtx.lineTo(left, top);
+  ivCtx.stroke();
+
+  // 无数据直接退出
+  if(ivData.length === 0) return;
+
+  //-----------------------------
+  // 计算坐标范围
+  //-----------------------------
+  const Vmin = Math.min(...ivData.map(d=>d.V));
+  const Vmax = Math.max(...ivData.map(d=>d.V));
+  const Imax = Math.max(...ivData.map(d=>d.I));
+  const Isat = Imax * 0.98;     // 近似饱和电流
+
+  // 理论截止电压
+  const lambda_nm = Number(lambdaSlider.value());
+  const phi_eV = Number(phiSelect.value());
+  const Eph = (h*c/(lambda_nm*1e-9)) / ev2J;
+  const Kmax = Math.max(0, Eph - phi_eV);
+  const V0 = Kmax; // eV → V
+
+  //-----------------------------
+  // 坐标轴刻度
+  //-----------------------------
+  ivCtx.fillStyle = "#333";
+  ivCtx.font = "10px Arial";
+  ivCtx.textAlign = "center";
+
+  // X轴刻度
+  for(let v = Math.ceil(Vmin); v <= Math.floor(Vmax); v++){
+    const x = left + (v-Vmin)/(Vmax-Vmin) * (W-left-right);
+    ivCtx.beginPath(); ivCtx.moveTo(x, H-bottom); ivCtx.lineTo(x, H-bottom+5); ivCtx.stroke();
+    ivCtx.fillText(v.toString(), x, H-bottom+15);
+  }
+
+  // Y轴刻度（3~4个）
+  ivCtx.textAlign = "right";
+  for(let i=0;i<=4;i++){
+    const Ival = (Imax/4)*i;
+    const y = H-bottom - Ival/Imax*(H-bottom-top);
+    ivCtx.beginPath(); ivCtx.moveTo(left-4, y); ivCtx.lineTo(left, y); ivCtx.stroke();
+    ivCtx.fillText(formatSI(Ival)+"A", left-6, y+3);
+  }
+
+  //-----------------------------
+  // 绘制 I–V 曲线
+  //-----------------------------
+  ivCtx.strokeStyle = "#2b6cb0";
+  ivCtx.lineWidth = 2;
+  ivCtx.beginPath();
+
+  ivData.forEach((p,i)=>{
+    const x = left + (p.V-Vmin)/(Vmax-Vmin)*(W-left-right);
+    const y = H-bottom - p.I/Imax*(H-bottom-top);
+    if(i===0) ivCtx.moveTo(x,y); else ivCtx.lineTo(x,y);
+  });
+
+  ivCtx.stroke();
+
+  // 画点
+  ivData.forEach((p)=>{
+    const x = left + (p.V-Vmin)/(Vmax-Vmin)*(W-left-right);
+    const y = H-bottom - p.I/Imax*(H-bottom-top);
+    ivCtx.fillStyle="#2b6cb0";
+    ivCtx.fillRect(x-2,y-2,4,4);
+  });
+
+  //-----------------------------
+  // 标注：截止电压 V0（竖线）
+  //-----------------------------
+  if(V0 >= Vmin && V0 <= Vmax){
+    const x0 = left + (V0-Vmin)/(Vmax-Vmin)*(W-left-right);
+
+    ivCtx.strokeStyle = "#e63946";
+    ivCtx.setLineDash([4,3]);
+    ivCtx.beginPath();
+    ivCtx.moveTo(x0, H-bottom);
+    ivCtx.lineTo(x0, top);
+    ivCtx.stroke();
+    ivCtx.setLineDash([]);
+
+    ivCtx.fillStyle = "#e63946";
+    ivCtx.textAlign="center";
+    ivCtx.fillText(`V₀ ≈ ${V0.toFixed(2)} V`, x0, top+12);
+  }
+
+  //-----------------------------
+  // 标注：饱和电流 Isat（横线）
+  //-----------------------------
+  const y_sat = H-bottom - Isat/Imax*(H-bottom-top);
+
+  ivCtx.strokeStyle = "#457b9d";
+  ivCtx.setLineDash([4,3]);
+  ivCtx.beginPath();
+  ivCtx.moveTo(left, y_sat);
+  ivCtx.lineTo(W-right, y_sat);
+  ivCtx.stroke();
+  ivCtx.setLineDash([]);
+
+  ivCtx.fillStyle = "#457b9d";
+  ivCtx.textAlign="right";
+  ivCtx.fillText(`I_sat ≈ ${formatSI(Imax)}A`, W-right-2, y_sat-4);
+}
+
+
+/* 画能量直方图（简单） */
+function drawHist(arr){
+  histCtx.clearRect(0,0,histCanvas.width,histCanvas.height);
+  histCtx.fillStyle = '#fff'; histCtx.fillRect(0,0,histCanvas.width,histCanvas.height);
+  histCtx.strokeStyle = '#e6eef9'; histCtx.strokeRect(0,0,histCanvas.width,histCanvas.height);
+
+  if(!arr || arr.length===0) return;
+  // 计算范围
+  const maxK = Math.max(...arr);
+  const bins = 12;
+  const counts = new Array(bins).fill(0);
+  for(let v of arr){
+    const idx = Math.min(bins-1, Math.floor((v / (maxK || 1)) * bins));
+    counts[idx]++;
+  }
+  const cmax = Math.max(...counts);
+  histCtx.fillStyle = '#2b6cb0';
+  for(let i=0;i<bins;i++){
+    const x = 6 + i*( (histCanvas.width-12)/bins );
+    const h = (counts[i] / (cmax || 1)) * (histCanvas.height-20);
+    histCtx.fillRect(x, histCanvas.height-10-h, (histCanvas.width-12)/bins - 4, h);
+  }
+}
+
+/* 辅助：格式化电流为适当单位（A, mA, µA, nA） */
+function formatSI(x){
+  if(!isFinite(x)) return '0';
+  const absx = Math.abs(x);
+  if(absx >= 1) return x.toFixed(3);
+  if(absx >= 1e-3) return (x*1e3).toFixed(3) + ' m';
+  if(absx >= 1e-6) return (x*1e6).toFixed(3) + ' µ';
+  if(absx >= 1e-9) return (x*1e9).toFixed(3) + ' n';
+  return x.toExponential(3);
+}
+
+/* p5.js 必需的占位函数（如果你想加入交互可扩展） */
+function mousePressed(){ /* 可用于点选电子 */ }
+function keyPressed(){ /* 可用于快捷键 */ }
+
+/* 初始化 p5（必须） */
+window.setup = setup;
+window.draw = draw;
+
+/* 在页面首次加载时也设置画布里的初始文本 */
+document.addEventListener('DOMContentLoaded', () => {
+  lambdaVal = document.getElementById('lambdaVal');
+  intensityVal = document.getElementById('intensityVal');
+  voltageVal = document.getElementById('voltageVal');
+  lambdaVal.innerText = document.getElementById('lambda').value;
+  intensityVal.innerText = document.getElementById('intensity').value;
+  voltageVal.innerText = parseFloat(document.getElementById('voltage').value).toFixed(1);
+  // hook elements used by p5 wrappers
+  calcInfo = { html: (s)=> document.getElementById('calcInfo').innerHTML = s };
+  currentEl = { html: (s)=> document.getElementById('current').innerHTML = s };
+  colRateEl = { html: (s)=> document.getElementById('colRate').innerHTML = s };
+});
+</script>
+</body>
+</html>
