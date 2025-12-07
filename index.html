@@ -27,7 +27,7 @@
 
   <div class="layout">
     <div id="sketch">
-      <!-- p5.js 画布会插入到这里 -->
+      <!-- p5.js 画布插入 -->
     </div>
 
     <div id="controls">
@@ -79,7 +79,7 @@
   <footer>提示：拖动滑块观察动画。</footer>
 
 <script>
-/* 物理常量与单位（注释里有说明） */
+/* 物理常量与单位 */
 const h = 6.62607015e-34;      // 普朗克常数 (J·s)
 const c = 2.99792458e8;        // 光速 (m/s)
 const eC = 1.602176634e-19;    // 元电荷 (C)
@@ -145,18 +145,18 @@ async function startAutoScan(){
   ivData = [];
   drawIV();
 
-  for(let V = -5.0; V <= 5.0; V += 0.5){
+  for(let V = -5.0; V <= 5.0; V += 0.1){
     voltageSlider.value(V);
     voltageVal.html(V.toFixed(1));
 
-    // 等待一段“稳定时间”，让残留电子大部分离开并在当前电压下达到稳态
-    // 这里等待 300 ms
+    // 等待稳定，让残留电子大部分离开并在当前电压下达到稳态
+    // 等待 300 ms
     await sleep(300);
 
-    // 在稳定后多帧采样做平均（例如 8 次采样）
+    // 在稳定后多帧采样做平均
     let samples = 0, sumI = 0;
     for(let k=0;k<8;k++){
-      await sleep(60);   // 每次等待一帧或两帧
+      await sleep(60);   
       sumI += I_smooth;
       samples++;
     }
@@ -193,7 +193,7 @@ function draw(){
   const Kmax_eV = Math.max(0, Eph_eV - phi_eV);
   const V0 = -Kmax_eV; // 理论截止电压（数值上等于 Kmax (eV)）
 
-  // 每帧发射电子数（简单比例关系）
+  // 每帧发射电子数
   const emitPerFrame = Math.round(intensity * 2);
 
   // 画阴极/阳极与区域
@@ -212,7 +212,7 @@ function draw(){
   // 发射电子（若 Kmax<=0 则光子能量不足，无发射）
   for(let i=0;i<emitPerFrame;i++){
     if(Kmax_eV <= 0) break;
-    // 初始能量采样：均匀 0..Kmax（简单模型）
+    // 初始能量采样：均匀 0..Kmax
     const K_eV = Math.random()*Kmax_eV;
     const speed = Math.sqrt(K_eV + 0.0001); // 用 sqrt(eV) 作速度量纲
     electrons.push({
@@ -297,7 +297,7 @@ function draw(){
   text(`理论截止 V₀ = ${V0.toFixed(3)} V`, 60, 395);
 }
 
-/* 画 I-V 曲线（方向已修正 & 饱和电流正确计算）*/
+/* 画 I-V 曲线*/
 function drawIV(){
   const W = ivCanvas.width;
   const H = ivCanvas.height;
@@ -329,14 +329,14 @@ function drawIV(){
 
   if(ivData.length === 0) return;
 
-  // ---- 1) 排序数据，确保 V 从小到大（负→正）----
+  // ---- 1) 排序数据 ----
   ivData.sort((a,b)=>a.V - b.V);
 
   const Vmin = ivData[0].V;
   const Vmax = ivData[ivData.length-1].V;
   const Imax = Math.max(...ivData.map(d=>d.I));
 
-  // ---- 2) 计算饱和电流（正电压区平均值）----
+  // ---- 2) 计算饱和电流 ----
   // 只在正电压区取最大电流
   const posPoints = ivData.filter(d=>d.V > 0);
   const Isat = posPoints.length > 0
@@ -344,7 +344,7 @@ function drawIV(){
     : Imax;
 
 
-  // ---- 3) 理论截止电压（应为负）----
+  // ---- 3) 理论截止电压 ----
   const lambda_nm = Number(lambdaSlider.value());
   const phi_eV = Number(phiSelect.value());
   const Eph = (h*c/(lambda_nm*1e-9)) / ev2J;
@@ -426,7 +426,7 @@ function drawIV(){
 }
 
 
-/* 画能量直方图（简单） */
+/* 画能量直方图 */
 function drawHist(arr){
   histCtx.clearRect(0,0,histCanvas.width,histCanvas.height);
   histCtx.fillStyle = '#fff'; histCtx.fillRect(0,0,histCanvas.width,histCanvas.height);
@@ -461,15 +461,15 @@ function formatSI(x){
   return x.toExponential(3);
 }
 
-/* p5.js 必需的占位函数（如果你想加入交互可扩展） */
+/* p5.js 必需的占位函数 */
 function mousePressed(){ /* 可用于点选电子 */ }
 function keyPressed(){ /* 可用于快捷键 */ }
 
-/* 初始化 p5（必须） */
+/* 初始化 p5*/
 window.setup = setup;
 window.draw = draw;
 
-/* 在页面首次加载时也设置画布里的初始文本 */
+/* 在页面首次加载时设置画布里的初始文本 */
 document.addEventListener('DOMContentLoaded', () => {
   lambdaVal = document.getElementById('lambdaVal');
   intensityVal = document.getElementById('intensityVal');
@@ -485,3 +485,4 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 </body>
 </html>
+
